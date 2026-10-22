@@ -35,3 +35,4 @@ pr_chronicler.log
 .idea/
 .DS_Store
 Thumbs.db
+.venv*/
