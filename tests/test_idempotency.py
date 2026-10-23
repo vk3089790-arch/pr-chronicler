@@ -171,3 +171,79 @@ async def test_startup_recovery_in_init_db(tmp_path):
     assert record.status == "FAILED"
     assert "Interrupted: server process terminated while delivery was in progress" in record.error_message
 
+
+@pytest.mark.asyncio
+async def test_repeated_init_db_never_duplicates_email_records(tmp_path):
+    """Test that repeated init_db calls are strictly idempotent and never duplicate email delivery records."""
+    import aiosqlite
+    db_path = str(tmp_path / "repeated_init.db")
+    db = DatabaseManager(db_path)
+    await db.init_db()
+
+    # Create a completed delivery
+    deliv_id = "deliv-completed-idempotency"
+    await db.register_delivery(deliv_id, "acme/api", 42, "closed")
+    await db.mark_completed(deliv_id, '{"issue_details": "Fix", "execution_summary": "Done", "key_learnings": ["L1", "L2", "L3"]}')
+
+    # First init_db should backfill exactly 1 email delivery
+    await db.init_db()
+    async with aiosqlite.connect(db_path) as conn:
+        async with conn.execute("SELECT COUNT(*) FROM email_deliveries WHERE delivery_id = ?", (deliv_id,)) as cur:
+            count_1 = (await cur.fetchone())[0]
+    assert count_1 == 1
+
+    # Second and third init_db runs should NOT create duplicate email deliveries
+    await db.init_db()
+    await db.init_db()
+    async with aiosqlite.connect(db_path) as conn:
+        async with conn.execute("SELECT COUNT(*) FROM email_deliveries WHERE delivery_id = ?", (deliv_id,)) as cur:
+            count_2 = (await cur.fetchone())[0]
+    assert count_2 == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_delivery_retry_rejected_if_pr_completed_by_another_delivery(temp_db):
+    """Test that retrying a failed delivery is rejected if another delivery completed the PR in the interim."""
+    repo = "acme/retry-race"
+    pr_num = 77
+
+    # 1. First delivery fails
+    deliv_1 = "deliv-failed-attempt"
+    await temp_db.register_delivery(deliv_1, repo, pr_num, "closed")
+    await temp_db.mark_failed(deliv_1, "Transient network timeout")
+
+    # 2. Second delivery for same PR arrives and completes
+    deliv_2 = "deliv-successful-attempt"
+    should_proc_2, _, _ = await temp_db.register_delivery(deliv_2, repo, pr_num, "closed")
+    assert should_proc_2 is True
+    await temp_db.mark_completed(deliv_2, '{"key_learnings": ["L1", "L2", "L3"]}')
+
+    # 3. Retry of first delivery arrives: should be REJECTED because PR is already completed
+    should_retry_1, reason_1, rec_1 = await temp_db.register_delivery(deliv_1, repo, pr_num, "closed")
+    assert should_retry_1 is False
+    assert f"PR #{pr_num} for {repo} was already processed successfully" in reason_1
+    assert rec_1.status == "COMPLETED"
+
+
+@pytest.mark.asyncio
+async def test_sqlite_foreign_key_enforcement(tmp_path):
+    """Test that foreign key enforcement is active in SQLite."""
+    import aiosqlite
+    db_path = str(tmp_path / "fk_test.db")
+    db = DatabaseManager(db_path)
+    await db.init_db()
+
+    async with aiosqlite.connect(db_path) as conn:
+        await conn.execute("PRAGMA foreign_keys = ON;")
+        # Attempting to insert an email delivery for a non-existent delivery_id must fail
+        with pytest.raises(Exception) as excinfo:
+            await conn.execute(
+                """
+                INSERT INTO email_deliveries (delivery_id, repo, pr_number, recipient, subject, status, sent_at)
+                VALUES ('non-existent-deliv-id', 'test/repo', 1, 'a@b.com', 'Subject', 'SENT', '2026-01-01')
+                """
+            )
+            await conn.commit()
+        assert "FOREIGN KEY constraint failed" in str(excinfo.value)
+
+

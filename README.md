@@ -1,6 +1,21 @@
-# Automated Open-Source PR Chronicler
+# PR Chronicler — Open-Source Contribution Explorer & Outreach Platform
 
-An event-driven, observable Python backend application built with FastAPI, LangChain, Google Gemini, and SQLite. It listens for GitHub pull-request webhooks, filters strictly for successfully merged PRs, hydrates rich context (code diffs, file modifications, and linked issues), synthesizes grounded technical reflections, and dispatches formatted reports via SMTP.
+PR Chronicler is an AI-powered Open-Source Contribution Explorer, Reflection Engine, and Outreach Platform.
+
+It provides two primary workflows:
+
+1. **Manual GitHub Contribution Explorer & Outreach Platform**:
+   - Enter any GitHub username, profile URL (`https://github.com/username`), or repository URL (`https://github.com/owner/repo`).
+   - Discover a contributor's public open-source contributions, authored pull requests (merged, open, closed), and public repositories.
+   - Inspect code changes, diff patches, problem statements, and linked issues.
+   - Generate on-demand, evidence-grounded AI engineering reflections powered by Gemini and LangChain LCEL (Issue Details, Execution Summary, and 3–4 Key Learnings distinguishing `[Verified]` code facts from `[Inferred]` intent).
+   - Draft and dispatch personalized outreach emails using verified public profile emails or user-provided addresses, with full previews, explicit confirmation safeguards, and masked recipient privacy.
+
+2. **Automated Merged-PR Webhook Engine**:
+   - Listens on `POST /webhook/github` with HMAC-SHA256 signature verification.
+   - Filters strictly for successfully closed and merged pull requests.
+   - Automatically hydrates context, generates structured Gemini post-mortems, and dispatches formatted HTML reports via SMTP.
+   - Tracks delivery idempotency, status transitions, and audit records in SQLite WAL mode.
 
 ---
 
@@ -272,3 +287,32 @@ To receive real webhook events from GitHub repositories:
 - **Credential Redaction**: `SanitizedFormatter` scrubs GitHub tokens (`ghp_*`), Google API keys (`AIza*`), Bearer headers, and SMTP passwords from all logs before writing to `pr_chronicler.log` or console.
 - **Idempotency Guarantee**: SQLite with WAL mode tracks `delivery_id` and `(repo, pr_number)` state transitions (`PROCESSING`, `COMPLETED`, `FAILED`, `IGNORED`). Retries of completed PRs do not trigger duplicate LLM calls or duplicate emails.
 - **Async Event Loop Offloading**: Blocking SMTP socket I/O runs in worker threads using `asyncio.to_thread` to ensure zero blocking of FastAPI event processing.
+
+---
+
+## Running the Web Application
+
+### 1. Start the FastAPI Backend
+```bash
+./.venv312/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+Interactive OpenAPI documentation is available at `http://localhost:8000/docs`.
+
+### 2. Start the Next.js Frontend
+```bash
+cd frontend
+npm run dev -- -p 3000
+```
+Open your browser at `http://localhost:3000`.
+
+### Navigation & Primary Sections
+
+1. **Explore (`/`)**: Primary GitHub search and discovery experience. Accepts usernames (`tiangolo`), profile URLs (`https://github.com/tiangolo`), or repository URLs (`https://github.com/fastapi/fastapi`). Features recent search history, auto-detection, and quick example chips.
+2. **Contributor Profiles (`/profiles` & `/profiles/[username]`)**: Comprehensive public profile metadata, public repositories, and authored pull requests with state filters (`merged`, `open`, `closed`).
+3. **Repository Explorer (`/repositories` & `/repositories/[owner]/[repo]`)**: Inspect repository metadata, topics, pull request statuses, and top contributors.
+4. **Contributions (`/contributions` & `/contributions/[owner]/[repo]/[prNumber]`)**: Inspect PR changes, file diff patches, and on-demand Gemini AI reflections (Issue Details, Execution Summary, and 3-4 Key Learnings with `[Verified]` vs `[Inferred]` evidence).
+5. **AI Learnings (`/learnings`)**: Curated engineering takeaways across all processed pull requests.
+6. **Email Outreach (`/outreach`)**: Compose, preview, and dispatch outreach emails referencing specific contributions. Enforces explicit confirmation before sending, generates personalized drafts, and masks recipient email addresses in audit listings.
+7. **Webhook Automation (`/webhook-automation`)**: Real-time monitoring of automated merged-PR webhook deliveries.
+8. **System Health & Settings (`/system-health`, `/settings`)**: Diagnostics, subsystem readiness, and safe configuration inspection.
+

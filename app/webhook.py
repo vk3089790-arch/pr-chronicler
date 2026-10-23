@@ -45,6 +45,7 @@ class WebhookPipeline:
     ):
         self.db = db_manager or DatabaseManager(settings.DATABASE_PATH)
         self.github = github_client or GitHubClient()
+        self.github_client = self.github
         self.reflection_chain = reflection_chain or ReflectionChain()
         self.email_dispatcher = email_dispatcher or EmailDispatcher()
 
@@ -88,8 +89,25 @@ class WebhookPipeline:
             await self.email_dispatcher.send_reflection_email(context, reflection)
             logger.info("Delivery %s: Email dispatch succeeded", delivery_id)
 
-            # 4. Mark DB as COMPLETED
-            await self.db.mark_completed(delivery_id, reflection_json)
+            # Record email delivery attempt in DB
+            subject = self.email_dispatcher.build_subject(repo_name, pr_number)
+            await self.db.record_email_delivery(
+                delivery_id=delivery_id,
+                repo=repo_name,
+                pr_number=pr_number,
+                recipient=self.email_dispatcher.recipient_email,
+                subject=subject,
+                status="SENT",
+            )
+
+            # 4. Mark DB as COMPLETED with metadata
+            await self.db.mark_completed(
+                delivery_id,
+                reflection_json,
+                pr_title=context.title,
+                pr_author=context.author,
+                pr_url=context.html_url,
+            )
 
             duration = time.time() - start_time
             logger.info("Delivery %s: Completed successfully in %.2f seconds", delivery_id, duration)
@@ -109,6 +127,16 @@ class WebhookPipeline:
             err_msg = f"{type(exc).__name__}: {str(exc)}"
             logger.error("Delivery %s: Processing failed after %.2f seconds: %s", delivery_id, duration, err_msg, exc_info=True)
             await self.db.mark_failed(delivery_id, err_msg)
+            if "smtp" in err_msg.lower() or "mail" in err_msg.lower():
+                await self.db.record_email_delivery(
+                    delivery_id=delivery_id,
+                    repo=repo_name,
+                    pr_number=pr_number,
+                    recipient=self.email_dispatcher.recipient_email,
+                    subject=self.email_dispatcher.build_subject(repo_name, pr_number),
+                    status="FAILED",
+                    error_message=err_msg,
+                )
             return {
                 "status": "failed",
                 "delivery_id": delivery_id,
@@ -194,9 +222,11 @@ async def github_webhook_endpoint(
     pr_dict = payload.get("pull_request") or {}
     is_merged = pr_dict.get("merged") is True
     pr_number = pr_dict.get("number") or payload.get("number") or 0
-    pr_title = pr_dict.get("title", "")
     repo_dict = payload.get("repository") or {}
     repo_name = repo_dict.get("full_name") or repo_dict.get("name") or "unknown/unknown"
+    pr_title = pr_dict.get("title") or f"PR #{pr_number}"
+    pr_author = (pr_dict.get("user") or {}).get("login") or (payload.get("sender") or {}).get("login") or "unknown"
+    pr_url = pr_dict.get("html_url") or f"https://github.com/{repo_name}/pull/{pr_number}"
 
     logger.info(
         "Webhook details: delivery=%s, action=%s, repo=%s, pr=#%d, title='%s', merged=%s",
@@ -216,7 +246,16 @@ async def github_webhook_endpoint(
             reason = f"Action '{action}' is ignored (only closed and merged PRs are processed)"
 
         logger.info("Delivery %s ignored: %s", delivery_id, reason)
-        await pipeline_service.db.record_ignored(delivery_id, repo_name, pr_number, action, reason)
+        await pipeline_service.db.record_ignored(
+            delivery_id,
+            repo_name,
+            pr_number,
+            action,
+            reason,
+            pr_title=pr_title,
+            pr_author=pr_author,
+            pr_url=pr_url,
+        )
         return {"status": "ignored", "reason": reason, "delivery_id": delivery_id}
 
     # 6. Idempotency Check & Registration
@@ -225,6 +264,9 @@ async def github_webhook_endpoint(
         repo=repo_name,
         pr_number=pr_number,
         action=action,
+        pr_title=pr_title,
+        pr_author=pr_author,
+        pr_url=pr_url,
     )
 
     if not should_process:

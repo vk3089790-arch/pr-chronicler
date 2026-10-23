@@ -256,3 +256,90 @@ def test_merged_pr_timely_acknowledgment_and_delivery_status(test_client, sample
         assert st_data["status"] == "COMPLETED"
         assert st_data["delivery_id"] == delivery_id
 
+
+def test_pipeline_failure_during_hydration_marks_failed(test_client, sample_merged_payload):
+    """Test that failure in GitHub context hydration marks delivery FAILED and stops the pipeline."""
+    with patch.object(pipeline_service.github, "hydrate_pr", new_callable=AsyncMock) as mock_hydrate, \
+         patch.object(pipeline_service.reflection_chain, "generate_reflection", new_callable=AsyncMock) as mock_chain, \
+         patch.object(pipeline_service.email_dispatcher, "send_reflection_email", new_callable=AsyncMock) as mock_email:
+
+        mock_hydrate.side_effect = RuntimeError("GitHub API rate limit exceeded")
+
+        deliv_id = "fail-stage-1-hydration"
+        resp = test_client.post(
+            "/webhook/github?sync=true",
+            json=sample_merged_payload,
+            headers={"X-GitHub-Event": "pull_request", "X-GitHub-Delivery": deliv_id},
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "failed"
+        assert "GitHub API rate limit exceeded" in data["error"]
+
+        mock_chain.assert_not_called()
+        mock_email.assert_not_called()
+
+        # Check DB status
+        st_resp = test_client.get(f"/webhook/delivery/{deliv_id}")
+        assert st_resp.status_code == 200
+        assert st_resp.json()["status"] == "FAILED"
+        assert "GitHub API rate limit exceeded" in st_resp.json()["error_message"]
+
+
+def test_pipeline_failure_during_gemini_reflection_marks_failed(test_client, sample_merged_payload, sample_hydrated_context):
+    """Test that failure in Gemini reflection generation marks delivery FAILED and never sends email."""
+    with patch.object(pipeline_service.github, "hydrate_pr", new_callable=AsyncMock) as mock_hydrate, \
+         patch.object(pipeline_service.reflection_chain, "generate_reflection", new_callable=AsyncMock) as mock_chain, \
+         patch.object(pipeline_service.email_dispatcher, "send_reflection_email", new_callable=AsyncMock) as mock_email:
+
+        mock_hydrate.return_value = sample_hydrated_context
+        mock_chain.side_effect = ValueError("Gemini returned invalid non-JSON output")
+
+        deliv_id = "fail-stage-2-gemini"
+        resp = test_client.post(
+            "/webhook/github?sync=true",
+            json=sample_merged_payload,
+            headers={"X-GitHub-Event": "pull_request", "X-GitHub-Delivery": deliv_id},
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "failed"
+        assert "invalid non-JSON" in data["error"]
+
+        mock_email.assert_not_called()
+
+        st_resp = test_client.get(f"/webhook/delivery/{deliv_id}")
+        assert st_resp.status_code == 200
+        assert st_resp.json()["status"] == "FAILED"
+
+
+def test_pipeline_failure_during_email_dispatch_records_failed_status(test_client, sample_merged_payload, sample_hydrated_context, sample_reflection_output):
+    """Test that failure during SMTP email dispatch marks delivery FAILED and records email failure."""
+    with patch.object(pipeline_service.github, "hydrate_pr", new_callable=AsyncMock) as mock_hydrate, \
+         patch.object(pipeline_service.reflection_chain, "generate_reflection", new_callable=AsyncMock) as mock_chain, \
+         patch.object(pipeline_service.email_dispatcher, "send_reflection_email", new_callable=AsyncMock) as mock_email:
+
+        mock_hydrate.return_value = sample_hydrated_context
+        mock_chain.return_value = sample_reflection_output
+        mock_email.side_effect = ConnectionRefusedError("SMTP server connection refused")
+
+        deliv_id = "fail-stage-3-smtp"
+        resp = test_client.post(
+            "/webhook/github?sync=true",
+            json=sample_merged_payload,
+            headers={"X-GitHub-Event": "pull_request", "X-GitHub-Delivery": deliv_id},
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "failed"
+        assert "SMTP server connection refused" in data["error"]
+
+        # Ensure delivery in DB is FAILED
+        st_resp = test_client.get(f"/webhook/delivery/{deliv_id}")
+        assert st_resp.status_code == 200
+        assert st_resp.json()["status"] == "FAILED"
+
+

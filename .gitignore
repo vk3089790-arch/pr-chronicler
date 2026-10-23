@@ -15,7 +15,8 @@ env/
 
 # Environment and Secrets
 .env
-.env.local
+.env.*
+!.env.example
 *.pem
 *.key
 
@@ -36,3 +37,15 @@ pr_chronicler.log
 .DS_Store
 Thumbs.db
 .venv*/
+
+# Frontend Dependencies and Builds
+node_modules/
+frontend/node_modules/
+.next/
+frontend/.next/
+frontend/out/
+frontend/build/
+*.tsbuildinfo
+next-env.d.ts
+frontend/next-env.d.ts
+

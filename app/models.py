@@ -173,3 +173,162 @@ class DeliveryRecord(BaseModel):
     updated_at: str
     reflection_json: Optional[str] = None
     error_message: Optional[str] = None
+    pr_title: Optional[str] = None
+    pr_author: Optional[str] = None
+    pr_url: Optional[str] = None
+
+
+class EmailDeliveryRecord(BaseModel):
+    """Persisted record of an email delivery attempt."""
+    id: Optional[int] = None
+    delivery_id: str
+    repo: str
+    pr_number: int
+    recipient: str
+    subject: str
+    status: str  # SENT, FAILED
+    error_message: Optional[str] = None
+    sent_at: str
+
+
+class LearningDetail(BaseModel):
+    """Structured learning extracted from a completed reflection."""
+    id: str
+    delivery_id: str
+    repo: str
+    pr_number: int
+    pr_title: str
+    pr_url: str
+    pr_author: Optional[str] = None
+    learning: str
+    index: int
+    evidence_tags: List[str] = Field(default_factory=list)
+    created_at: str
+    execution_summary_snippet: Optional[str] = None
+    issue_details_snippet: Optional[str] = None
+
+
+class PaginatedResponse(BaseModel):
+    """Generic pagination wrapper."""
+    items: List[Any]
+    total: int
+    page: int
+    limit: int
+    total_pages: int
+
+
+# =====================================================================
+# Explorer & Outreach Models
+# =====================================================================
+
+class RecentSearchItem(BaseModel):
+    """Recent search entry."""
+    id: int
+    query: str
+    search_type: str  # 'user' | 'repo'
+    target: str
+    created_at: str
+
+
+class ContributorProfile(BaseModel):
+    """GitHub contributor profile data."""
+    login: str
+    id: Optional[int] = None
+    avatar_url: Optional[str] = None
+    html_url: str
+    name: Optional[str] = None
+    company: Optional[str] = None
+    blog: Optional[str] = None
+    location: Optional[str] = None
+    email: Optional[str] = None  # Public email if available on profile
+    bio: Optional[str] = None
+    twitter_username: Optional[str] = None
+    public_repos: int = 0
+    public_gists: int = 0
+    followers: int = 0
+    following: int = 0
+    created_at: Optional[str] = None
+
+
+class RepositoryMetadata(BaseModel):
+    """GitHub repository metadata."""
+    name: str
+    full_name: str
+    owner: str
+    html_url: str
+    description: Optional[str] = None
+    stargazers_count: int = 0
+    forks_count: int = 0
+    open_issues_count: int = 0
+    language: Optional[str] = None
+    topics: List[str] = Field(default_factory=list)
+    default_branch: str = "main"
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class ExplorerPRItem(BaseModel):
+    """Pull request summary item for explorer lists."""
+    repo: str
+    pr_number: int
+    title: str
+    author: str
+    author_avatar_url: Optional[str] = None
+    html_url: str
+    state: str  # 'merged', 'open', 'closed'
+    created_at: str
+    updated_at: Optional[str] = None
+    merged_at: Optional[str] = None
+    is_analyzed: bool = False
+    is_saved: bool = False
+
+
+class OutreachDraftRequest(BaseModel):
+    """Request to create an outreach draft email."""
+    contributor_username: str
+    recipient_email: Optional[str] = None
+    repo: Optional[str] = None
+    pr_number: Optional[int] = None
+    pr_title: Optional[str] = None
+    email_source: str = "public_profile"  # 'public_profile' | 'user_provided'
+
+
+class OutreachDraftResponse(BaseModel):
+    """Generated outreach email draft."""
+    recipient: Optional[str] = None
+    recipient_masked: Optional[str] = None
+    email_source: str
+    subject: str
+    body: str
+
+
+class OutreachSendRequest(BaseModel):
+    """Request to send an outreach email with explicit confirmation."""
+    recipient_email: str
+    subject: str
+    body: str
+    contributor_username: Optional[str] = None
+    repo: Optional[str] = None
+    pr_number: Optional[int] = None
+    email_source: str = "public_profile"
+    idempotency_key: str
+    confirm_send: bool = False  # Explicit confirmation required
+
+
+class OutreachRecord(BaseModel):
+    """Saved record of an outreach email."""
+    id: int
+    recipient_masked: str
+    contributor_username: Optional[str] = None
+    repo: Optional[str] = None
+    pr_number: Optional[int] = None
+    subject: str
+    body_snippet: str
+    status: str  # 'SENT' | 'FAILED'
+    email_source: str
+    error_message: Optional[str] = None
+    sent_at: Optional[str] = None
+    created_at: str
+    idempotency_key: str
+
+
